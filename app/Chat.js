@@ -1,4 +1,3 @@
-
 "use client";
 
 import { useEffect, useRef, useState } from "react";
@@ -7,12 +6,18 @@ import {
   getBrowserId,
   getDisplayName,
   saveDisplayName,
+  getPublicNumber,
+  getNameColor,
+  saveNameColor,
+  CHAT_COLORS,
 } from "@/utils/supabase/identity";
 
 export default function Chat() {
   const [isOpen, setIsOpen] = useState(false);
   const [browserId, setBrowserId] = useState("");
+  const [publicNumber, setPublicNumber] = useState("");
   const [name, setName] = useState("");
+  const [nameColor, setNameColor] = useState("#8000A6");
   const [joined, setJoined] = useState(false);
   const [messages, setMessages] = useState([]);
   const [message, setMessage] = useState("");
@@ -22,7 +27,9 @@ export default function Chat() {
 
   useEffect(() => {
     setBrowserId(getBrowserId());
+    setPublicNumber(getPublicNumber());
     setName(getDisplayName());
+    setNameColor(getNameColor());
   }, []);
 
   useEffect(() => {
@@ -33,7 +40,9 @@ export default function Chat() {
     async function loadMessages() {
       const { data, error } = await supabase
         .from("messages")
-        .select("id, browser_id, display_name, message, created_at")
+        .select(
+          "id, browser_id, public_number, display_name, name_color, message, created_at"
+        )
         .order("created_at", { ascending: false })
         .limit(100);
 
@@ -74,7 +83,9 @@ export default function Chat() {
       )
       .subscribe((status) => {
         if (status === "CHANNEL_ERROR" && active) {
-          setError("Live updates failed. Check your Supabase Realtime settings.");
+          setError(
+            "Live updates failed. Check your Supabase Realtime settings."
+          );
         }
       });
 
@@ -95,12 +106,13 @@ export default function Chat() {
 
     const cleanName = name.trim();
 
-    if (!cleanName || cleanName.length > 30) {
-      setError("Choose a name between 1 and 30 characters.");
+    if (cleanName.length > 30) {
+      setError("Names must be 30 characters or fewer.");
       return;
     }
 
     saveDisplayName(cleanName);
+    saveNameColor(nameColor);
     setName(cleanName);
     setError("");
     setJoined(true);
@@ -123,7 +135,9 @@ export default function Chat() {
 
     const { error } = await supabase.from("messages").insert({
       browser_id: browserId,
-      display_name: name,
+      public_number: publicNumber,
+      display_name: name.trim(),
+      name_color: nameColor,
       message: cleanMessage,
     });
 
@@ -136,6 +150,18 @@ export default function Chat() {
     setSending(false);
   }
 
+  function getNumber(item) {
+    if (item.public_number) return item.public_number;
+
+    // Fallback for messages sent before numbers were saved.
+    const digits = (item.browser_id || "").replace(/\D/g, "");
+    return digits.slice(0, 4).padEnd(4, "0");
+  }
+
+  function getName(item) {
+    return item.display_name?.trim() || "User";
+  }
+
   return (
     <>
       <button
@@ -143,9 +169,7 @@ export default function Chat() {
         onClick={() => setIsOpen((open) => !open)}
         aria-label={isOpen ? "Close chat" : "Open chat"}
         aria-expanded={isOpen}
-        className="fixed bottom-5 right-5 z-50 flex items-center gap-2
-          rounded-full border-2 border-black bg-orange-500 px-5 py-3
-          font-bold text-black shadow-xl transition hover:bg-orange-400"
+        className="fixed bottom-5 right-5 z-50 flex items-center gap-2 rounded-full border-2 border-black bg-orange-500 px-5 py-3 font-bold text-black shadow-xl transition hover:bg-orange-400"
       >
         <span aria-hidden="true">{isOpen ? "×" : "💬"}</span>
         {isOpen ? "Close chat" : "Earlify Chat"}
@@ -154,12 +178,9 @@ export default function Chat() {
       {isOpen && (
         <section
           aria-label="Earlify community chat"
-          className="fixed bottom-20 right-4 z-50 flex h-[min(600px,75vh)]
-            w-[min(380px,calc(100vw-2rem))] flex-col overflow-hidden
-            rounded-xl border-2 border-black bg-orange-50 text-black shadow-2xl"
+          className="fixed bottom-20 right-4 z-50 flex h-[min(600px,75vh)] w-[min(380px,calc(100vw-2rem))] flex-col overflow-hidden rounded-xl border-2 border-black bg-orange-50 text-black shadow-2xl"
         >
-          <header className="flex items-center justify-between border-b-2
-            border-black bg-orange-500 p-4">
+          <header className="flex items-center justify-between border-b-2 border-black bg-orange-500 p-4">
             <div>
               <h2 className="text-xl font-bold">Earlify Chat</h2>
               <p className="text-sm">The community hangout</p>
@@ -172,10 +193,9 @@ export default function Chat() {
                   setJoined(false);
                   setError("");
                 }}
-                className="rounded border border-black px-2 py-1 text-sm
-                  hover:bg-orange-300"
+                className="rounded border border-black px-2 py-1 text-sm hover:bg-orange-300"
               >
-                Change name
+                Edit identity
               </button>
             )}
           </header>
@@ -183,30 +203,67 @@ export default function Chat() {
           {!joined ? (
             <form
               onSubmit={joinChat}
-              className="flex flex-1 flex-col justify-center gap-4 p-5"
+              className="flex flex-1 flex-col justify-center gap-4 overflow-y-auto p-5"
             >
-              <p>Choose a name and join the conversation.</p>
+              <p>Choose how you want to appear in the chat.</p>
+
+              <label className="text-sm font-bold" htmlFor="chat-name">
+                Display name (optional)
+              </label>
 
               <input
+                id="chat-name"
                 value={name}
                 onChange={(event) => setName(event.target.value)}
-                placeholder="Your display name"
+                placeholder={`User #${publicNumber || "...."}`}
                 maxLength={30}
-                required
-                className="w-full rounded border-2 border-black bg-white
-                  p-3 outline-orange-600"
+                className="w-full rounded border-2 border-black bg-white p-3 outline-orange-600"
               />
+
+              <div>
+                <p className="mb-2 text-sm font-bold">Choose your name colour</p>
+
+                <div className="grid grid-cols-6 gap-3">
+                  {CHAT_COLORS.map((color) => (
+                    <button
+                      key={color}
+                      type="button"
+                      title={color}
+                      aria-label={`Choose colour ${color}`}
+                      aria-pressed={nameColor === color}
+                      onClick={() => {
+                        setNameColor(color);
+                        saveNameColor(color);
+                      }}
+                      className={`h-9 w-full rounded-full border-2 ${
+                        nameColor === color
+                          ? "border-black ring-2 ring-orange-500 ring-offset-2"
+                          : "border-gray-300"
+                      }`}
+                      style={{ backgroundColor: color }}
+                    />
+                  ))}
+                </div>
+              </div>
+
+              <div className="rounded border border-orange-200 bg-white p-3">
+                <p className="text-xs text-gray-600">Preview</p>
+                <strong style={{ color: nameColor }}>
+                  {name.trim() || "User"} #{publicNumber || "...."}
+                </strong>
+              </div>
 
               <button
                 type="submit"
-                className="rounded border-2 border-black bg-orange-500
-                  p-3 font-bold hover:bg-orange-400"
+                className="rounded border-2 border-black bg-orange-500 p-3 font-bold hover:bg-orange-400"
               >
                 Join chat
               </button>
 
               {error && (
-                <p role="alert" className="text-sm text-red-700">{error}</p>
+                <p role="alert" className="text-sm text-red-700">
+                  {error}
+                </p>
               )}
             </form>
           ) : (
@@ -221,36 +278,47 @@ export default function Chat() {
                   </p>
                 )}
 
-                {messages.map((item) => (
-                  <article
-                    key={item.id}
-                    className="break-words rounded-lg border border-orange-200
-                      bg-white p-3 shadow-sm"
-                  >
-                    <div className="flex items-baseline justify-between gap-2">
-                      <strong className="text-sm">
-                        {item.display_name}
-                        {item.browser_id === browserId && " (you)"}
-                      </strong>
-                      <time className="shrink-0 text-xs text-gray-500">
-                        {new Date(item.created_at).toLocaleTimeString([], {
-                          hour: "2-digit",
-                          minute: "2-digit",
-                        })}
-                      </time>
-                    </div>
+                {messages.map((item) => {
+                  const number = getNumber(item);
+                  const isYou = item.browser_id === browserId;
 
-                    <p className="mt-1 whitespace-pre-wrap">{item.message}</p>
-                  </article>
-                ))}
+                  return (
+                    <article
+                      key={item.id}
+                      className="break-words rounded-lg border border-orange-200 bg-white p-3 shadow-sm"
+                    >
+                      <div className="flex items-baseline justify-between gap-2">
+                        <strong
+                          className="text-sm"
+                          style={{
+                            color: CHAT_COLORS.includes(item.name_color)
+                              ? item.name_color
+                              : "#8000A6",
+                          }}
+                        >
+                          {getName(item)} #{number}
+                          {isYou && " (you)"}
+                        </strong>
+
+                        <time className="shrink-0 text-xs text-gray-500">
+                          {new Date(item.created_at).toLocaleTimeString([], {
+                            hour: "2-digit",
+                            minute: "2-digit",
+                          })}
+                        </time>
+                      </div>
+
+                      <p className="mt-1 whitespace-pre-wrap">{item.message}</p>
+                    </article>
+                  );
+                })}
 
                 <div ref={bottomRef} />
               </div>
 
               <form
                 onSubmit={sendMessage}
-                className="flex gap-2 border-t-2 border-black
-                  bg-orange-100 p-3"
+                className="flex gap-2 border-t-2 border-black bg-orange-100 p-3"
               >
                 <input
                   value={message}
@@ -258,16 +326,13 @@ export default function Chat() {
                   placeholder="Write a message..."
                   maxLength={500}
                   required
-                  className="min-w-0 flex-1 rounded border-2 border-black
-                    bg-white p-2 outline-orange-600"
+                  className="min-w-0 flex-1 rounded border-2 border-black bg-white p-2 outline-orange-600"
                 />
 
                 <button
                   type="submit"
                   disabled={sending || !message.trim()}
-                  className="rounded border-2 border-black bg-orange-500
-                    px-3 font-bold hover:bg-orange-400
-                    disabled:cursor-not-allowed disabled:opacity-50"
+                  className="rounded border-2 border-black bg-orange-500 px-3 font-bold hover:bg-orange-400 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {sending ? "..." : "Send"}
                 </button>
