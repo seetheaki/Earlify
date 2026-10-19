@@ -1,3 +1,4 @@
+
 "use client";
 
 import { useEffect, useRef, useState } from "react";
@@ -13,32 +14,37 @@ import {
 } from "@/utils/supabase/identity";
 
 export default function Chat() {
-  const [isOpen, setIsOpen] = useState(false);
-  const [browserId, setBrowserId] = useState("");
-  const [publicNumber, setPublicNumber] = useState("");
-  const [name, setName] = useState("");
-  const [nameColor, setNameColor] = useState("#8000A6");
-  const [joined, setJoined] = useState(false);
-  const [messages, setMessages] = useState([]);
-  const [message, setMessage] = useState("");
-  const [error, setError] = useState("");
-  const [sending, setSending] = useState(false);
-  const bottomRef = useRef(null);
+  let [isOpen, setIsOpen] = useState(false);
+  let [browserId, setBrowserId] = useState("");
+  let [publicNumber, setPublicNumber] = useState("");
+  let [name, setName] = useState("");
+  let [nameColor, setNameColor] = useState("#8000A6");
+  let [joined, setJoined] = useState(false);
+  let [messages, setMessages] = useState([]);
+  let [message, setMessage] = useState("");
+  let [error, setError] = useState("");
+  let [sending, setSending] = useState(false);
 
-  useEffect(() => {
+  let bottomRef = useRef(null);
+
+  // Load the saved identity when the chat first opens in the app.
+  useEffect(function initialiseIdentity() {
     setBrowserId(getBrowserId());
     setPublicNumber(getPublicNumber());
     setName(getDisplayName());
     setNameColor(getNameColor());
   }, []);
 
-  useEffect(() => {
-    if (!isOpen || !joined || !browserId) return;
+  // Load messages and listen for new messages from Supabase.
+  useEffect(function manageChatMessages() {
+    if (!isOpen || !joined || !browserId) {
+      return;
+    }
 
     let active = true;
 
     async function loadMessages() {
-      const { data, error } = await supabase
+      let result = await supabase
         .from("messages")
         .select(
           "id, browser_id, public_number, display_name, name_color, message, created_at"
@@ -46,24 +52,61 @@ export default function Chat() {
         .order("created_at", { ascending: false })
         .limit(100);
 
-      if (!active) return;
-
-      if (error) {
-        setError(error.message);
+      if (!active) {
         return;
       }
 
-      setMessages((current) => {
-        const combined = [...(data ?? []).reverse(), ...current];
-        return Array.from(
-          new Map(combined.map((item) => [item.id, item])).values()
-        ).slice(-100);
+      if (result.error) {
+        setError(result.error.message);
+        return;
+      }
+
+      let loadedMessages = [];
+
+      if (result.data) {
+        loadedMessages = result.data.reverse();
+      }
+
+      setMessages(function mergeLoadedMessages(current) {
+        let combined = [...loadedMessages, ...current];
+
+        let uniqueMessages = new Map();
+
+        for (let i = 0; i < combined.length; i++) {
+          uniqueMessages.set(combined[i].id, combined[i]);
+        }
+
+        return Array.from(uniqueMessages.values()).slice(-100);
       });
+    }
+
+    function handleNewMessage(payload) {
+      setMessages(function addNewMessage(current) {
+        let alreadyExists = current.some(
+          function checkExistingMessage(item) {
+            return item.id === payload.new.id;
+          }
+        );
+
+        if (alreadyExists) {
+          return current;
+        }
+
+        return [...current, payload.new].slice(-100);
+      });
+    }
+
+    function handleSubscriptionStatus(status) {
+      if (status === "CHANNEL_ERROR" && active) {
+        setError(
+          "Live updates failed. Check your Supabase Realtime settings."
+        );
+      }
     }
 
     loadMessages();
 
-    const channel = supabase
+    let channel = supabase
       .channel("earlify-public-chat")
       .on(
         "postgres_changes",
@@ -72,39 +115,53 @@ export default function Chat() {
           schema: "public",
           table: "messages",
         },
-        (payload) => {
-          setMessages((current) => {
-            if (current.some((item) => item.id === payload.new.id)) {
-              return current;
-            }
-            return [...current, payload.new].slice(-100);
-          });
-        }
+        handleNewMessage
       )
-      .subscribe((status) => {
-        if (status === "CHANNEL_ERROR" && active) {
-          setError(
-            "Live updates failed. Check your Supabase Realtime settings."
-          );
-        }
-      });
+      .subscribe(handleSubscriptionStatus);
 
-    return () => {
+    // Stop listening when this effect needs to be cleaned up.
+    return function cleanupChatMessages() {
       active = false;
       supabase.removeChannel(channel);
     };
   }, [isOpen, joined, browserId]);
 
-  useEffect(() => {
-    if (isOpen) {
-      bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  // Scroll down when messages change and the chat is open.
+  useEffect(function scrollToLatestMessage() {
+    if (isOpen && bottomRef.current) {
+      bottomRef.current.scrollIntoView({ behavior: "smooth" });
     }
   }, [messages, isOpen]);
 
+  // Open or close the chat panel.
+  function toggleChat() {
+    setIsOpen(function togglePreviousOpenState(open) {
+      return !open;
+    });
+  }
+
+  // Return the correct label for the chat button.
+  function getChatButtonLabel() {
+    if (isOpen) {
+      return "Close chat";
+    }
+
+    return "Earlify Chat";
+  }
+
+  function getChatButtonIcon() {
+    if (isOpen) {
+      return "×";
+    }
+
+    return "💬";
+  }
+
+  // Save the chosen identity and join the chat.
   function joinChat(event) {
     event.preventDefault();
 
-    const cleanName = name.trim();
+    let cleanName = name.trim();
 
     if (cleanName.length > 30) {
       setError("Names must be 30 characters or fewer.");
@@ -118,12 +175,15 @@ export default function Chat() {
     setJoined(true);
   }
 
+  // Send a message to the Supabase database.
   async function sendMessage(event) {
     event.preventDefault();
 
-    const cleanMessage = message.trim();
+    let cleanMessage = message.trim();
 
-    if (!cleanMessage || sending) return;
+    if (!cleanMessage || sending) {
+      return;
+    }
 
     if (cleanMessage.length > 500) {
       setError("Messages must be 500 characters or fewer.");
@@ -133,46 +193,140 @@ export default function Chat() {
     setSending(true);
     setError("");
 
-    const { error } = await supabase.from("messages").insert({
-      browser_id: browserId,
-      public_number: publicNumber,
-      display_name: name.trim(),
-      name_color: nameColor,
-      message: cleanMessage,
-    });
+    try {
+      let result = await supabase.from("messages").insert({
+        browser_id: browserId,
+        public_number: publicNumber,
+        display_name: name.trim(),
+        name_color: nameColor,
+        message: cleanMessage,
+      });
 
-    if (error) {
-      setError(error.message);
-    } else {
-      setMessage("");
+      if (result.error) {
+        setError(result.error.message);
+      } else {
+        setMessage("");
+      }
+    } catch (sendError) {
+      setError("Unable to send your message. Please try again.");
+    } finally {
+      setSending(false);
     }
-
-    setSending(false);
   }
 
+  // Get the four-digit number attached to a user's messages.
   function getNumber(item) {
-    if (item.public_number) return item.public_number;
+    if (item.public_number) {
+      return item.public_number;
+    }
 
     // Fallback for messages sent before numbers were saved.
-    const digits = (item.browser_id || "").replace(/\D/g, "");
+    let digits = (item.browser_id || "").replace(/\D/g, "");
+
     return digits.slice(0, 4).padEnd(4, "0");
   }
 
+  // Use a fallback name if a message has no display name.
   function getName(item) {
-    return item.display_name?.trim() || "User";
+    if (item.display_name && item.display_name.trim()) {
+      return item.display_name.trim();
+    }
+
+    return "User";
+  }
+
+  // Choose a valid colour for a message author's name.
+  function getItemColor(item) {
+    if (CHAT_COLORS.includes(item.name_color)) {
+      return item.name_color;
+    }
+
+    return "#8000A6";
+  }
+
+  // Change the selected name colour.
+  function createColorClickHandler(color) {
+    function handleColorClick() {
+      setNameColor(color);
+      saveNameColor(color);
+    }
+
+    return handleColorClick;
+  }
+
+  // Display one colour selection button.
+  function renderColorButton(color) {
+    let selectedClass = "border-gray-300";
+
+    if (nameColor === color) {
+      selectedClass =
+        "border-black ring-2 ring-orange-500 ring-offset-2";
+    }
+
+    return (
+      <button
+        key={color}
+        type="button"
+        title={color}
+        aria-label={"Choose colour " + color}
+        aria-pressed={nameColor === color}
+        onClick={createColorClickHandler(color)}
+        className={"h-9 w-full rounded-full border-2 " + selectedClass}
+        style={{ backgroundColor: color }}
+      />
+    );
+  }
+
+  // Display one message in the chat.
+  function renderMessage(item) {
+    let number = getNumber(item);
+    let isYou = item.browser_id === browserId;
+    let displayName = getName(item);
+
+    if (isYou) {
+      displayName = displayName + " (you)";
+    }
+
+    let time = new Date(item.created_at).toLocaleTimeString([], {
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+
+    return (
+      <article
+        key={item.id}
+        className="break-words rounded-lg border border-orange-200 bg-white p-3 shadow-sm"
+      >
+        <div className="flex items-baseline justify-between gap-2">
+          <strong
+            className="text-sm"
+            style={{ color: getItemColor(item) }}
+          >
+            {getName(item)} #{number}
+            {isYou && " (you)"}
+          </strong>
+
+          <time className="shrink-0 text-xs text-gray-500">
+            {time}
+          </time>
+        </div>
+
+        <p className="mt-1 whitespace-pre-wrap">{item.message}</p>
+      </article>
+    );
   }
 
   return (
     <>
       <button
         type="button"
-        onClick={() => setIsOpen((open) => !open)}
-        aria-label={isOpen ? "Close chat" : "Open chat"}
+        onClick={toggleChat}
+        aria-label={getChatButtonLabel()}
         aria-expanded={isOpen}
         className="fixed bottom-5 right-5 z-50 flex items-center gap-2 rounded-full border-2 border-black bg-orange-500 px-5 py-3 font-bold text-black shadow-xl transition hover:bg-orange-400"
       >
-        <span aria-hidden="true">{isOpen ? "×" : "💬"}</span>
-        {isOpen ? "Close chat" : "Earlify Chat"}
+        <span aria-hidden="true">{getChatButtonIcon()}</span>
+        {getChatButtonLabel()}
       </button>
 
       {isOpen && (
@@ -189,7 +343,7 @@ export default function Chat() {
             {joined && (
               <button
                 type="button"
-                onClick={() => {
+                onClick={function editIdentity() {
                   setJoined(false);
                   setError("");
                 }}
@@ -214,40 +368,27 @@ export default function Chat() {
               <input
                 id="chat-name"
                 value={name}
-                onChange={(event) => setName(event.target.value)}
-                placeholder={`User #${publicNumber || "...."}`}
+                onChange={function updateName(event) {
+                  setName(event.target.value);
+                }}
+                placeholder={"User #" + (publicNumber || "....")}
                 maxLength={30}
                 className="w-full rounded border-2 border-black bg-white p-3 outline-orange-600"
               />
 
               <div>
-                <p className="mb-2 text-sm font-bold">Choose your name colour</p>
+                <p className="mb-2 text-sm font-bold">
+                  Choose your name colour
+                </p>
 
                 <div className="grid grid-cols-6 gap-3">
-                  {CHAT_COLORS.map((color) => (
-                    <button
-                      key={color}
-                      type="button"
-                      title={color}
-                      aria-label={`Choose colour ${color}`}
-                      aria-pressed={nameColor === color}
-                      onClick={() => {
-                        setNameColor(color);
-                        saveNameColor(color);
-                      }}
-                      className={`h-9 w-full rounded-full border-2 ${
-                        nameColor === color
-                          ? "border-black ring-2 ring-orange-500 ring-offset-2"
-                          : "border-gray-300"
-                      }`}
-                      style={{ backgroundColor: color }}
-                    />
-                  ))}
+                  {CHAT_COLORS.map(renderColorButton)}
                 </div>
               </div>
 
               <div className="rounded border border-orange-200 bg-white p-3">
                 <p className="text-xs text-gray-600">Preview</p>
+
                 <strong style={{ color: nameColor }}>
                   {name.trim() || "User"} #{publicNumber || "...."}
                 </strong>
@@ -278,40 +419,7 @@ export default function Chat() {
                   </p>
                 )}
 
-                {messages.map((item) => {
-                  const number = getNumber(item);
-                  const isYou = item.browser_id === browserId;
-
-                  return (
-                    <article
-                      key={item.id}
-                      className="break-words rounded-lg border border-orange-200 bg-white p-3 shadow-sm"
-                    >
-                      <div className="flex items-baseline justify-between gap-2">
-                        <strong
-                          className="text-sm"
-                          style={{
-                            color: CHAT_COLORS.includes(item.name_color)
-                              ? item.name_color
-                              : "#8000A6",
-                          }}
-                        >
-                          {getName(item)} #{number}
-                          {isYou && " (you)"}
-                        </strong>
-
-                        <time className="shrink-0 text-xs text-gray-500">
-                          {new Date(item.created_at).toLocaleTimeString([], {
-                            hour: "2-digit",
-                            minute: "2-digit",
-                          })}
-                        </time>
-                      </div>
-
-                      <p className="mt-1 whitespace-pre-wrap">{item.message}</p>
-                    </article>
-                  );
-                })}
+                {messages.map(renderMessage)}
 
                 <div ref={bottomRef} />
               </div>
@@ -322,7 +430,9 @@ export default function Chat() {
               >
                 <input
                   value={message}
-                  onChange={(event) => setMessage(event.target.value)}
+                  onChange={function updateMessage(event) {
+                    setMessage(event.target.value);
+                  }}
                   placeholder="Write a message..."
                   maxLength={500}
                   required
@@ -339,7 +449,10 @@ export default function Chat() {
               </form>
 
               {error && (
-                <p role="alert" className="bg-white px-3 pb-2 text-sm text-red-700">
+                <p
+                  role="alert"
+                  className="bg-white px-3 pb-2 text-sm text-red-700"
+                >
                   {error}
                 </p>
               )}
