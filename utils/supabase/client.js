@@ -7,3 +7,5 @@ export const supabase = createBrowserClient(
   supabaseUrl,
   supabaseKey
 );
+
+
